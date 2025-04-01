@@ -1,104 +1,64 @@
 const fs = require('fs');
 const mysql = require('mysql2');
 const conf = JSON.parse(fs.readFileSync('conf.json'));
-conf.ssl = {
+const mysqlConfig = conf.mysql;
+mysqlConfig.ssl = {
    ca: fs.readFileSync(__dirname + '/ca.pem')
-}
-const connection = mysql.createConnection(conf);
+};
+const connection = mysql.createConnection(mysqlConfig);
 
-const executeQuery = (sql) => {
+connection.connect((err) => {
+   if (err) {
+      console.error("Errore di connessione al database:", err);
+      process.exit(1);
+   }
+   console.log("Connesso al database!");
+});
+
+const executeQuery = (sql, params = []) => {
    return new Promise((resolve, reject) => {
-      connection.query(sql, function (err, result) {
+      connection.query(sql, params, function (err, result) {
          if (err) {
             console.error(err);
-            reject();
+            reject(err);
          }
-         console.log('done');
          resolve(result);
       });
-   })
-}
+   });
+};
 
 const database = {
-   // Creazione delle tabelle booking e type
    createTable: async () => {
       await executeQuery(`
-         CREATE TABLE IF NOT EXISTS type (
-            id INT PRIMARY KEY AUTO_INCREMENT,
-            name VARCHAR(20) NOT NULL
-         )
-      `);
-
-      await executeQuery(`
-         CREATE TABLE IF NOT EXISTS booking (
-            id INT PRIMARY KEY AUTO_INCREMENT,
-            idType INT NOT NULL,
-            date DATE NOT NULL,
-            hour INT NOT NULL,
-            name VARCHAR(50),
-            FOREIGN KEY (idType) REFERENCES type(id) ON DELETE CASCADE
-         )
+         CREATE TABLE IF NOT EXISTS movements (
+         id INT PRIMARY KEY AUTO_INCREMENT,
+         chatId BIGINT NOT NULL, 
+         type ENUM('income', 'expense') NOT NULL,
+         amount DECIMAL(10,2) NOT NULL,
+         description VARCHAR(100),
+         date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
       `);
    },
-   insertType: async (name) => {
-      let sql = `
-         INSERT INTO type (name)
-         VALUES ('${name}')
-      `;
-      return await executeQuery(sql);
-   },
-   selectTypes: async () => {
-      let sql = `SELECT * FROM type`;
-      return await executeQuery(sql);
-   },
-   // Inserimento di una prenotazione
-   insertBooking: async (booking) => {
+
+   insertMovement: async (chatId, type, amount, description) => {
       const sql = `
-         INSERT INTO booking (idType, date, hour, name)
-         VALUES (${booking.idType}, '${booking.date}', ${booking.hour}, '${booking.name}')
+         INSERT INTO movements (chatId, type, amount, description) 
+         VALUES (?, ?, ?, ?)
       `;
-      return await executeQuery(sql);
+      return await executeQuery(sql, [chatId, type, amount, description]);
    },
 
-   // Selezionare tutte le prenotazioni con il nome del tipo associato
-   selectAllBookings: async () => {
-      const sql = `
-         SELECT b.id, t.name AS type, b.date, b.hour, b.name
-         FROM booking AS b
-         JOIN type AS t ON b.idType = t.id
-      `;
-      return await executeQuery(sql);
+   selectMovements: async (chatId) => {
+      const sql = `SELECT * FROM movements WHERE chatId = ? ORDER BY date DESC`;
+      return await executeQuery(sql, [chatId]);
    },
 
-   //Seleziona tutte le prenotazioni di un giorno
-   selectBookingsByDate: async (date) => {
-      const sql = `
-         SELECT b.id, t.name AS type, b.date, b.hour, b.name
-         FROM booking AS b
-         JOIN type AS t ON b.idType = t.id
-         WHERE DATE(b.date) = '${date}'
-      `;
-      return await executeQuery(sql);
-   },
-
-   // Eliminare una prenotazione tramite ID
-   deleteBooking: async (id) => {
-      const sql = `
-         DELETE FROM booking WHERE id=${id}
-      `;
-      return await executeQuery(sql);
-   },
-
-   // Eliminare tutte le prenotazioni e i tipi
-   dropTables: async () => {
-      await executeQuery(`DROP TABLE IF EXISTS booking`);
-   },
-
-   // Svuotare le tabelle mantenendone la struttura
-   truncateTables: async () => {
-      await executeQuery(`TRUNCATE TABLE booking`);
-      await executeQuery(`TRUNCATE TABLE type`);
+   selectMovementsType: async (chatId,type) => {
+      const sql = `SELECT * FROM movements WHERE chatId = ? AND type = ? ORDER BY date DESC`;
+      return await executeQuery(sql, [chatId,type]);
    }
+   
 };
 
 module.exports = database;
