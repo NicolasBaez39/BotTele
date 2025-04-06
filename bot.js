@@ -9,6 +9,7 @@ const telegramConfig = conf.telegram;
 const token = telegramConfig.key;
 const bot = new TelegramBot(token, { polling: true });
 const userSessions = {};
+const sub = {};
 database.createTable(); 
 
 bot.on("message",async (msg) =>{
@@ -57,6 +58,41 @@ bot.on("message",async (msg) =>{
         }
 
         delete userSessions[chatId]; 
+    }else if (sub[chatId]?.step === "waiting_amount") {
+        const amount = parseFloat(text);
+        if (isNaN(amount)) {
+            bot.sendMessage(chatId, "Errore: devi inserire un numero valido.");
+            return;
+        }
+
+        sub[chatId].amount = amount;
+        sub[chatId].step = "waiting_time";
+
+        bot.sendMessage(chatId, "Inserisci una descrizione per l'importo:");
+    }else if (sub[chatId]?.step === "waiting_time") {
+        const time = parseFloat(text);
+        if (isNaN(time)) {
+            bot.sendMessage(chatId, "Errore: devi inserire un numero valido.");
+            return;
+        }
+
+        sub[chatId].time = time;
+        sub[chatId].step = "waiting_description";
+
+        bot.sendMessage(chatId, "Inserisci una descrizione per l'importo:");
+    } else if (sub[chatId]?.step === "waiting_description") {
+        const description = text;
+        const { type, amount } = sub[chatId];
+
+        if (type === "expense") {
+            await database.insertMovement(chatId,"expense" ,amount, description);
+            bot.sendMessage(chatId, `✅ Uscita di ${amount}€ registrata con descrizione: "${description}".`);
+        } else if (type === "income") {
+            await database.insertMovement(chatId,"income" ,amount, description);
+            bot.sendMessage(chatId, `✅ Entrata di ${amount}€ registrata con descrizione: "${description}".`);
+        }
+
+        delete sub[chatId]; 
     }
 });
 
@@ -104,14 +140,47 @@ bot.on('callback_query', async(callbackQuery) => {
         const options = {
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: "💵 Visualizza uscite", callback_data: "see_exit" }],
-                    [{ text: "💸 Visualizza entrate", callback_data: "see_income" }],
+                    [{ text: "💵 Visualizza uscite", callback_data: "see_all_exit" }],
+                    [{ text: "💸 Visualizza entrate", callback_data: "see_all_income" }],
                     [{ text: "📜 Visualizza movimenti", callback_data: "see_all_movements" }]
                 ]
             }
         };
 
         bot.sendMessage(chatId, welcomeMessage, options);
+    }else if (data === "see_all_movements") {
+        const options = {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "📆 Giorno", callback_data: "movements_day" }],
+                    [{ text: "📅 Settimana", callback_data: "movements_week" }],
+                    [{ text: "📆 Mese", callback_data: "movements_month" }]
+                ]
+            }
+        };
+        bot.sendMessage(chatId, "Seleziona il periodo dei movimenti che vuoi vedere:", options);
+    }else if (data === "see_all_exit") {
+        const options = {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "📆 Giorno", callback_data: "exit_day" }],
+                    [{ text: "📅 Settimana", callback_data: "exit_week" }],
+                    [{ text: "📆 Mese", callback_data: "exit_month" }]
+                ]
+            }
+        };
+        bot.sendMessage(chatId, "Seleziona il periodo delle uscite che vuoi vedere:", options);
+    }else if (data === "see_all_income") {
+        const options = {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: "📆 Giorno", callback_data: "income_day" }],
+                    [{ text: "📅 Settimana", callback_data: "income_week" }],
+                    [{ text: "📆 Mese", callback_data: "income_month" }]
+                ]
+            }
+        };
+        bot.sendMessage(chatId, "Seleziona il periodo delle entrate che vuoi vedere:", options);
     }else if (data === "remove_subscriction") {
         const welcomeMessage = `
         Puoi scegliere di rimuovere le tue uscite o entrate periodiche, scegli qua sotto.
@@ -131,7 +200,7 @@ bot.on('callback_query', async(callbackQuery) => {
         userSessions[chatId] = { step: "waiting_amount", type: "expense" };
         bot.sendMessage(chatId, "Inserisci l'importo dell'uscita:");
     }else if (data === "add_exit_sub") {
-        //abbonamento
+        sub[chatId] = { step: "waiting_amount", type: "expense" };
     }else if (data === "add_incoming_one") {
         userSessions[chatId] = { step: "waiting_amount", type: "income" };
         bot.sendMessage(chatId, "Inserisci l'importo dell'entrata:");
@@ -141,8 +210,9 @@ bot.on('callback_query', async(callbackQuery) => {
         bot.sendMessage(msg.chat.id, "Funzione per rimuovere un'attività.");
     }else if (data === "remove_salary") {
         bot.sendMessage(msg.chat.id, "Funzione per rimuovere un'attività.");
-    }else if (data === "see_exit") {
-        const movements = await database.selectMovementsType(chatId,"expense");
+    }else if (data.startsWith("exit_")) {
+        let period = data.split("_")[1]; 
+        const movements = await database.selectMovementsType(chatId, "expense",period);
         if (movements.length === 0) {
             bot.sendMessage(chatId, "Nessuna uscita registrata.");
         } else {
@@ -155,8 +225,9 @@ bot.on('callback_query', async(callbackQuery) => {
             });
             bot.sendMessage(chatId, response);
         }
-    }else if (data === "see_income") {
-        const movements = await database.selectMovementsType(chatId,"income");
+    }else if (data.startsWith("income_")) {
+        let period = data.split("_")[1]; 
+        const movements = await database.selectMovementsType(chatId, "income",period);
         if (movements.length === 0) {
             bot.sendMessage(chatId, "Nessuna entrata registrata.");
         } else {
@@ -169,8 +240,10 @@ bot.on('callback_query', async(callbackQuery) => {
             });
             bot.sendMessage(chatId, response);
         }
-    }else if (data === "see_all_movements") {
-        const movements = await database.selectMovements(chatId);
+    }else if (data.startsWith("movements_")) {
+        let period = data.split("_")[1]; 
+        const movements = await database.selectMovements(chatId, period);
+
         if (movements.length === 0) {
             bot.sendMessage(chatId, "Nessun movimento registrato.");
         } else {
